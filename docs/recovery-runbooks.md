@@ -40,3 +40,16 @@ This is only recoverable if you used `--copy-to` on a different disk, or copied 
 1. Set up a new host and Bench with the same Frappe major version and apps (see `site_config_backup.json` and your app list).
 2. `bench new-site SITE`, then `bench --site SITE restore <db.sql.gz> --with-public-files ... --with-private-files ...` from the copies.
 3. Restore `encryption_key` from `site_config_backup.json` into the new `site_config.json`. Without it, stored passwords cannot be decrypted.
+
+## R6. Production mode broke the site
+
+1. `frappe-host production status`, then `sudo supervisorctl status`, then `sudo nginx -t`.
+2. If `enable` failed part-way, it already removed its own links. Fix the reported problem and re-run.
+3. To go back to development mode: `frappe-host production disable`, then `bench start`.
+4. Supervisor logs: `BENCH/logs/*.error.log`. NGINX logs: `/var/log/nginx/error.log`.
+
+## R7. A publish failed or the site must go offline now
+
+1. A failed `publish` has already removed the domain and regenerated the NGINX config. Check with `frappe-host domain check DOMAIN --site SITE`.
+2. To take a published site offline immediately: `frappe-host unpublish SITE --domain DOMAIN`, then remove the router port forward.
+3. Suspected compromise: also turn on maintenance mode (`frappe-host site maintenance SITE on`), change the Administrator password, check `frappe-host history`, and restore from a backup taken before the incident.

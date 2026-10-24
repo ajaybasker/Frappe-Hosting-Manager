@@ -16,6 +16,16 @@ Start with `frappe-host doctor`, then `frappe-host site status SITE`. Every fail
 | `bench list` shows DRIFT | Sites, apps or versions changed outside frappe-host | Review the listed changes, then `frappe-host bench refresh PATH` to accept them |
 | `state schema vN is newer` | State written by a newer frappe-host | Upgrade frappe-host. Do not downgrade the state. |
 | Operation shows `interrupted` | The process was killed mid-operation | Read its log in `~/.local/share/frappe-host/operations/`, check the site with `site status`, and see the recovery runbooks |
+| `init`: "MANUAL: apt offers MariaDB 10.11 but version-16 needs 11.8" | Ubuntu's MariaDB is too old for v16 | Add the MariaDB 11.8 repository (README §3.2), or use `--branch version-15` |
+| `init`: "~/.local/bin/node already exists and was not created by frappe-host" | You installed node there yourself | Remove or rename it, or make sure it is new enough, then re-run |
+| `bench`/`node` "not found" right after init | `~/.local/bin` is not on PATH in this shell | Open a new terminal or log out and back in |
+| `production enable`: "something is listening on the Bench web port" | `bench start` is still running | Stop it (Ctrl+C), then re-run |
+| `production enable`: "… does not belong to this Bench" | Another Bench with the same directory name is in production, or a hand-made file exists | Rename the Bench directory or remove the other file after checking it |
+| Production: site gives 404 or the NGINX default page | The hostname doesn't reach the site | `frappe-host site hosts SITE` (local), or check the DNS record and `server_name` in `config/nginx.conf` |
+| Production: CSS/JS missing (403) | NGINX can't traverse your home directory | Re-run `production enable`; it adds `o+x` to the directories that need it |
+| `publish`: certbot fails | Let's Encrypt can't reach http://DOMAIN from the internet | `frappe-host domain check DOMAIN --detect-public-ip`: check the DNS A record, router forwarding of port 80, and CGNAT. The publish was rolled back. |
+| `probe` from a phone fails but works at home | Port forwarding, CGNAT or the ISP is blocking inbound traffic | See docs/networking.md |
+| Scheduled backups don't run | cron isn't running, or the machine was off | `systemctl status cron`; check `~/.local/share/frappe-host/scheduled-backups.log` |
 | `backup verify` fails with a checksum mismatch | The file changed or was corrupted after the backup | Use the `--copy-to` copy if you have one; otherwise take a new backup |
 
 ## Never do this

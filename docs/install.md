@@ -4,15 +4,23 @@
 
 - Ubuntu or Debian (see [support-matrix.md](support-matrix.md)), as a **non-root** user.
 - Python ≥ 3.10 and `pipx` (`sudo apt install pipx`) or [uv](https://docs.astral.sh/uv/).
-- For managing sites: an existing Frappe Bench, and `bench` on your PATH.
+- Nothing else: `frappe-host init` installs Frappe's dependencies, or you can register a Bench you already have.
 
-frappe-host 0.1.0 does **not** install Frappe, MariaDB, Redis or Node.js. To set up a Bench, follow the official [installation guide](https://docs.frappe.io/framework/user/en/installation), then run `frappe-host doctor` to check the result.
+`frappe-host init` can install everything Frappe needs (see the README §3). It follows the official [installation guide](https://docs.frappe.io/framework/user/en/installation), with these differences:
+
+| Official guide | frappe-host init | Why |
+|---|---|---|
+| `curl … nvm install.sh \| bash`, then `nvm install 24` | Downloads the official nodejs.org tarball, checks SHA-256, unpacks it into `~/.local/share/frappe-host/node`, and links it into `~/.local/bin`. If nvm already has a suitable version, it prints a MANUAL step instead. | No remote script execution |
+| `curl … uv/install.sh \| sh` | `pipx install uv` | No remote script execution |
+| `uv python install 3.14 --default` | `uv python install 3.14` (no `--default`) | Doesn't change your global `python` |
+| `uv tool install frappe-bench` | same | — |
+| apt MariaDB | apt MariaDB if it's new enough; otherwise a MANUAL step to add the MariaDB repository | Never pipes a script into sudo |
 
 ## Install
 
 ```bash
-git clone <repository-url> frappe-hosting-manager
-cd frappe-hosting-manager
+git clone https://github.com/ajaybasker/Frappe-Hosting-Manager.git
+cd Frappe-Hosting-Manager
 pipx install .            # or: uv tool install .
 frappe-host --version
 ```

@@ -68,6 +68,67 @@ def tree_digest(root: Path) -> dict[str, tuple[int, float]]:
     return out
 
 
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch):
+    """Every test gets a throwaway HOME (so ~/.local/bin, ~/.nvm and state are isolated)
+    and a `sudo` that refuses to run unless a test installs the fake system tools."""
+    real_home = os.path.expanduser("~")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    # Drop PATH entries under the real home (~/.local/bin, nvm, ...) so a developer's
+    # own bench/node/uv can never be picked up by a test.
+    clean = [p for p in os.environ["PATH"].split(os.pathsep) if p and not p.startswith(real_home + os.sep)]
+    monkeypatch.setenv("PATH", os.pathsep.join(clean))
+    monkeypatch.delenv("NVM_DIR", raising=False)
+    guard = tmp_path / "guard-bin"
+    guard.mkdir()
+    stub = guard / "sudo"
+    stub.write_text("#!/bin/sh\necho 'real sudo is blocked in tests' >&2\nexit 97\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{guard}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FRAPPE_HOST_SYSROOT", str(tmp_path / "sysroot"))
+    return home
+
+
+FAKE_TOOLS = ("sudo", "nginx", "supervisorctl", "systemctl", "certbot", "crontab", "apt-get", "apt-cache",
+              "dpkg-query", "uv", "pipx", "npm", "mariadb-secure-installation")
+
+
+@pytest.fixture
+def fake_system(tmp_path, monkeypatch):
+    """Fake system tools first on PATH plus a sysroot with /etc directories.
+    Returns a helper with .calls() and .sysroot."""
+    bindir = tmp_path / "sysbin"
+    bindir.mkdir()
+    tool = Path(__file__).parent / "fixtures" / "fake_tool.py"
+    for name in FAKE_TOOLS:
+        exe = bindir / name
+        exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{tool}" {name} "$@"\n')
+        exe.chmod(0o755)
+    root = tmp_path / "sysroot"
+    for d in ("etc/nginx/conf.d", "etc/supervisor/conf.d", "etc/letsencrypt/live"):
+        (root / d).mkdir(parents=True, exist_ok=True)
+    (root / "etc" / "hosts").write_text("127.0.0.1\tlocalhost\n")
+    log = tmp_path / "tools.jsonl"
+    monkeypatch.setenv("FAKE_TOOL_LOG", str(log))
+    monkeypatch.setenv("FAKE_CRONTAB", str(tmp_path / "crontab.txt"))
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+
+    class FakeSystem:
+        sysroot = root
+        crontab = tmp_path / "crontab.txt"
+
+        @staticmethod
+        def calls(tool_name: str | None = None) -> list[list[str]]:
+            if not log.exists():
+                return []
+            rows = [json.loads(l) for l in log.read_text().splitlines()]
+            return [r["argv"] for r in rows if tool_name is None or r["tool"] == tool_name]
+
+    return FakeSystem
+
+
 @pytest.fixture
 def state_home(tmp_path, monkeypatch) -> Path:
     home = tmp_path / "state"

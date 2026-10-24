@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "frappe-hosting-manager"
-version = "0.1.0"
+version = "0.2.0"
 description = "Manage and host Frappe Benches and sites on your own Linux computer."
 readme = "README.md"
 license = { text = "MIT" }

@@ -65,8 +65,16 @@ Backups in `sites/SITE/private/backups/` share a disk with the live site, so a d
 
 ## Frappe's scheduled backups
 
-If Frappe's own scheduler creates backups, `backup list SITE` shows those files as **unmanaged**. They have no recorded checksum and cannot be restored through frappe-host until a future `backup import` command exists. You can still restore them with `bench restore` directly.
+If Frappe's own scheduler creates backups, `backup list SITE` shows those files as **unmanaged**. `frappe-host backup import SITE` records each complete set (sets without a database dump are skipped) with checksums taken at import time, after which they can be verified and restored like any other backup.
 
-## Not yet implemented
+## Retention
 
-Scheduled backups, retention policies with deletion preview, encryption, and remote destinations.
+`frappe-host backup prune SITE --keep N` deletes all but the newest N frappe-host backups of the site, including their `--copy-to` copies. It shows the list first and needs the site name typed (or `--confirm SITE`). Files that frappe-host didn't record are never deleted.
+
+## Scheduled backups
+
+`frappe-host backup schedule SITE --at HH:MM [--copy-to DIR] [--keep N]` adds a daily entry to **your** crontab, inside a marked block. Other lines are preserved. The entry runs `backup create` and then, if `--keep` is given, `backup prune --keep N --confirm SITE`. Output is appended to `~/.local/share/frappe-host/scheduled-backups.log`. Use `backup schedules` to list entries and `backup unschedule SITE` to remove one. `frappe-host check` fails when a site's latest frappe-host backup is older than 26 hours.
+
+## Not implemented
+
+Encryption, cloud destinations, and automated restore drills.

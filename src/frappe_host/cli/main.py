@@ -27,21 +27,9 @@ from frappe_host.domain.models import overall
 from frappe_host.domain.validation import ValidationError, existing_directory
 from frappe_host.policies.confirm import ConfirmationRefused, require_typed_confirmation
 
-EXIT_OK, EXIT_FAILED, EXIT_INVALID, EXIT_BLOCKED, EXIT_REFUSED, EXIT_NOT_FOUND = 0, 1, 2, 3, 4, 5
-
-
-class Refused(Exception):
-    pass
-
-
-def confirm_proceed(args: argparse.Namespace, question: str = "Proceed?") -> None:
-    """Consent for non-destructive changes: --yes, or an interactive y/N."""
-    if args.yes:
-        return
-    if not sys.stdin.isatty():
-        raise Refused("not running interactively; review the plan with --dry-run and re-run with --yes")
-    if input(f"{question} [y/N] ").strip().lower() not in ("y", "yes"):
-        raise Refused("cancelled; nothing was changed")
+from frappe_host.cli.common import (  # noqa: F401  (re-exported for callers)
+    EXIT_BLOCKED, EXIT_FAILED, EXIT_INVALID, EXIT_NOT_FOUND, EXIT_OK, EXIT_REFUSED, Refused, confirm_proceed,
+)
 
 
 # ---------------------------------------------------------------- commands
@@ -199,6 +187,11 @@ def cmd_site_create(args, store: Store) -> int:
     confirm_proceed(args)
     op_id = sites.create(store, bench, args.site.lower(), argv, plan)
     print(f"Site {args.site} created (operation {op_id}). Check it with: frappe-host site status {args.site}")
+    if bench_fs.detect_process_mode(bench) == "supervisor":
+        print(f"Production mode: run `frappe-host production enable {bench}` to add the site to NGINX.")
+    else:
+        print(f"Development mode: run `frappe-host site hosts {args.site}`, start the Bench with `bench start`, "
+              f"then open http://{args.site}:{bench_fs.common_config(bench).get('webserver_port', 8000)}")
     return EXIT_OK
 
 
@@ -450,7 +443,14 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("state", help="inspect the local registry").add_subparsers(dest="state_cmd", metavar="ACTION", required=True)
     add(st, "path", cmd_state, "print the state directory")
     add(st, "export", cmd_state, "export registry contents as JSON")
+
+    from frappe_host.cli import workflows
+
+    workflows.register(sub, add, mutating, bench, site, bk)
     return p
+
+
+BACKUP_ACTIONS = ("create", "list", "verify", "prune", "import", "schedule", "schedules", "unschedule", "-h", "--help")
 
 
 def _expand_shorthand(argv: list[str]) -> list[str]:
@@ -458,7 +458,7 @@ def _expand_shorthand(argv: list[str]) -> list[str]:
     for i, a in enumerate(argv):
         if a == "backup":
             nxt = argv[i + 1] if i + 1 < len(argv) else None
-            if nxt and not nxt.startswith("-") and nxt not in ("create", "list", "verify"):
+            if nxt and not nxt.startswith("-") and nxt not in BACKUP_ACTIONS:
                 return argv[: i + 1] + ["create"] + argv[i + 1 :]
             break
         if not a.startswith("-"):
@@ -477,7 +477,9 @@ def main(argv: list[str] | None = None) -> int:
     process.interactive_stdout = 2 if args.json else None  # fd 2: child output to stderr
     store = Store()
     try:
-        return args.func(args, store)
+        rc = args.func(args, store)
+        sys.stdout.flush()  # surface a closed pipe here, not at interpreter exit
+        return rc
     except ValidationError as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_INVALID
@@ -498,5 +500,10 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
         return 130
+    except BrokenPipeError:  # e.g. `frappe-host ... | head`
+        import os
+
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return EXIT_OK
     finally:
         store.close()

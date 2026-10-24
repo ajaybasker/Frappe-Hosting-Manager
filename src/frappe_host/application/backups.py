@@ -62,6 +62,12 @@ class CreatePlan:
     warnings: list[str]
 
 
+def validate_copy_to(bench: Path, copy_to: Path) -> None:
+    if copy_to == bench / "sites" or (bench / "sites") in copy_to.parents:
+        # Anything under sites/ may be web-served (public/files) and would leak the dump and secrets.
+        raise ValidationError("--copy-to must not be inside the Bench's sites/ directory")
+
+
 def plan_create(bench: Path, site: str, copy_to: Path | None) -> CreatePlan:
     if bench.stat().st_uid != os.getuid():
         raise ValidationError("this Bench is owned by another user; run frappe-host as that user")
@@ -81,9 +87,7 @@ def plan_create(bench: Path, site: str, copy_to: Path | None) -> CreatePlan:
         "restrict new backup files to owner-only permissions (0600); they contain data and secrets",
     ]
     if copy_to:
-        if copy_to == bench / "sites" or (bench / "sites") in copy_to.parents:
-            # Anything under sites/ may be web-served (public/files) and would leak the dump and secrets.
-            raise ValidationError("--copy-to must not be inside the Bench's sites/ directory")
+        validate_copy_to(bench, copy_to)
         plan.append(f"copy the backup set to {copy_to} and verify the copied checksums")
         if host.device_id(copy_to) == host.device_id(bench):
             warnings.append(f"{copy_to} is on the same filesystem as the Bench; this does not protect against disk failure")
@@ -340,3 +344,73 @@ def restore(store: Store, bench: Path, target_site: str, rec: dict[str, Any], rp
                 msg += f"; the pre-restore backup {pre['id']} can be restored with: frappe-host restore {target_site} {pre['id']}"
             raise OperationFailed(msg)
     return {"operation_id": op.id, "pre_restore_backup": pre["id"] if pre else None}
+
+
+# ---------------------------------------------------------------- retention
+
+def plan_prune(store: Store, site: str, bench: Path, keep: int) -> list[dict[str, Any]]:
+    """Managed backups of a site that fall outside the newest `keep`. Never touches unmanaged files."""
+    if keep < 1:
+        raise ValidationError("--keep must be at least 1")
+    recs = [r for r in list_backups(store, site) if r["bench_path"] == str(bench)]
+    return recs[keep:]
+
+
+def prune(store: Store, site: str, victims: list[dict[str, Any]]) -> tuple[str, int]:
+    plan = [f"delete backup {r['id']} ({r['created_at']}, {len(r['files'])} files incl. copies)" for r in victims]
+    freed = 0
+    with operation(store, "backup.prune", site, plan) as op:
+        for r in victims:
+            for f in r["files"]:
+                for key in ("path", "copy"):
+                    p = f.get(key)
+                    if p and Path(p).is_file():
+                        freed += Path(p).stat().st_size
+                        Path(p).unlink()
+                        op.log(f"deleted {p}")
+            with store.transaction() as db:
+                db.execute("DELETE FROM backups WHERE id=?", (r["id"],))
+    return op.id, freed
+
+
+# ---------------------------------------------------------------- import unmanaged sets
+
+def import_unmanaged(store: Store, bench: Path, site: str) -> list[dict[str, Any]]:
+    """Record backup sets already on disk (e.g. Frappe's scheduled backups) with fresh checksums.
+    Checksums prove integrity from the time of import onwards, not since creation."""
+    known = {f["name"] for r in list_backups(store, site) for f in r["files"]}
+    names = unmanaged_backups(bench, site, known)
+    groups: dict[str, list[str]] = {}
+    for n in names:
+        groups.setdefault(n.split("-", 1)[0], []).append(n)
+    imported = []
+    bdir = bench_fs.backups_dir(bench, site)
+    with operation(store, "backup.import", f"{bench}:{site}", [f"import {len(groups)} backup set(s) from {bdir}"]) as op:
+        for prefix, files in sorted(groups.items()):
+            if not any(classify(n) == "database" for n in files):
+                op.log(f"skip {prefix}: no database dump")
+                continue
+            recs = []
+            for n in files:
+                p = bdir / n
+                recs.append({"name": n, "path": str(p), "kind": classify(n), "size": p.stat().st_size, "sha256": sha256(p)})
+            rid = new_id("bk")
+            created = _prefix_time(prefix) or now_iso()
+            with store.transaction() as db:
+                db.execute(
+                    "INSERT INTO backups(id, site, bench_path, created_at, frappe_version, files, total_size, operation_id, origin) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (rid, site, str(bench), created, None, store.dumps(recs), sum(r["size"] for r in recs), op.id, "imported"),
+                )
+            imported.append({"id": rid, "prefix": prefix, "files": len(recs)})
+            op.log(f"imported {prefix} as {rid}")
+    return imported
+
+
+def _prefix_time(prefix: str) -> str | None:
+    from datetime import datetime, timezone
+
+    try:
+        return datetime.strptime(prefix[:15], "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc).isoformat(timespec="seconds")
+    except ValueError:
+        return None

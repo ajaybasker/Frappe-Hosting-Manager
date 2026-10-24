@@ -6,7 +6,7 @@
 |---|---|---|
 | **Localhost** | The site answers on this computer | `site status` sends `GET /api/method/ping` to `127.0.0.1:<webserver_port>` with the site's `Host` header and requires Frappe's `pong` |
 | **LAN** | Other devices on your network can reach it | `doctor` and `site status` report whether the port listens beyond loopback. **This is not tested from another device.** A host or router firewall can still block access, so the result is reported as `unknown`. |
-| **Public internet** | Anyone on the internet can reach it | **Not implemented.** It is always reported as "not verified". |
+| **Public internet** | Anyone on the internet can reach it | `domain check` collects evidence (DNS, NAT/CGNAT, ports, TLS) but always reports public reachability as *not verified*. Only `frappe-host probe URL`, run from **another network** (for example a phone hotspot), tests it. |
 
 A pass at one level never implies the next.
 
@@ -20,7 +20,24 @@ A pass at one level never implies the next.
 
 frappe-host never changes bind addresses or firewall rules.
 
-## Public hosting prerequisites (Phase 6, planned)
+## Domain diagnostics (implemented)
+
+`frappe-host domain check DOMAIN [--site SITE] [--detect-public-ip]` reports:
+
+- **DNS:** A/AAAA records, and whether they only point to private (LAN-only) addresses.
+- **Network position:** a public address directly on this computer, a CGNAT address (100.64.0.0/10) on an interface, or a private address behind a router (port forwarding needed).
+- **Public IP** (only with `--detect-public-ip`, which sends one request to api.ipify.org): CGNAT range detection, and a comparison with the DNS A record. A mismatch can mean a stale record, a second NAT, or a VPN.
+- **Ports 80/443:** listeners and their binding. UFW state is read from its config file.
+- With `--site`: whether the domain is bound to the site and present in the Bench's NGINX config.
+- **TLS:** a fully verified handshake to 127.0.0.1:443 with the domain as SNI, plus days until expiry and whether `certbot.timer` is active.
+
+Double NAT can't be detected reliably from inside the network. Treat a public-IP mismatch as a hint, not proof.
+
+## Publishing (implemented)
+
+`frappe-host publish SITE --domain DOMAIN [--email EMAIL]` is described in the README (§8) and [ADR 0004](adr/0004-production-and-publishing.md).
+
+## Public hosting prerequisites
 
 Public access requires **all** of the following, and several are outside this tool's control:
 
